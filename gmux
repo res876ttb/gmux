@@ -23,7 +23,7 @@ subparser_set = parser_set.add_subparsers(dest='subcmd_set')
 parser_set_session = subparser_set.add_parser('session', help='Rename a session.', add_help=False)
 parser_set_session.add_argument('old_name', help='Name of the session.', type=str)
 parser_set_session.add_argument('new_name', help='New name of the session.', type=str)
-parser_set_repo = subparser_set.add_parser('repo', help='Set repo option.', add_help=False)
+parser_set_repo = subparser_set.add_parser('repo', help='Set repo option.', add_help=False) # TODO: per session setup
 parser_set_repo.add_argument('-a', '--all', help='Use repo command to replace both git pull and git checkout.', action='store_true')
 parser_set_repo.add_argument('-p', '--pull', help='Toggle this option: use repo command `repo sync` to replace git pull.', action='store_true')
 parser_set_repo.add_argument('-c', '--checkout', help='Toggle this option: use repo command `repo start` to replace git branch.', action='store_true')
@@ -195,6 +195,7 @@ def init():
   '''
   Program initialization.
   1. Load config.
+  2. Load session.
   '''
   global config, session
   
@@ -387,6 +388,7 @@ def tryCheckout(path, targetBranch, useRepo, bringChange, discardChange, noStash
         break
       stash = getStashInfo()
     
+    # 7.2 Restore the change from the last branch
     for line in stash:
       if gmuxMsg in line:
         stashNumber = line.split('}')[0].split('{')[1]
@@ -394,6 +396,7 @@ def tryCheckout(path, targetBranch, useRepo, bringChange, discardChange, noStash
         runCmdAndCheck('git stash pop %s' % stashNumber, cls.red('ERROR') + ' occurs in command `git stash pop`:')
         break
   else:
+    # 7.3 Restore the change of the target branch
     if not noStash:
       for line in stash:
         if 'gmux:%s:' % targetBranch in line and ':latest' in line:
@@ -509,6 +512,58 @@ def status():
       print()
   else:
     go(session)
+
+# =========================
+# PULL
+# =========================
+
+def runPull(path, useRepo, q):
+  '''
+  Run `git pull` at path.
+  '''
+  os.chdir(path)
+
+  p = subprocess.Popen('git status'.split(' '), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+  stdout, stderr = p.communicate()
+  stdout, stderr = stdout.decode('utf-8'), stderr.decode('utf-8')
+  checkError(stdout, stderr, p, cls.red('ERROR') + ' occurs in command `git status`:')
+  isClean = True if 'working tree clean' in stdout else False
+
+  if not isClean:
+    q.put((path, stdout, stderr))
+    return
+
+  cls = Color()
+  p = subprocess.Popen('git pull', stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+  stdout, stderr = p.communicate()
+  stdout, stderr = stdout.decode('utf-8'), stderr.decode('utf-8')
+  if p.returncode != 0:
+    q.put((path, stdout, stderr))
+
+def pull():
+  '''
+  Pull the latest change.
+  '''
+  paths = sess['paths']
+
+  q = multiprocessing.Queue()
+  ps = []
+  for path in paths:
+    p = multiprocessing.Process(target=runPull, args=(path, config['repo']['pull']))
+    p.start()
+    ps.append(p)
+  
+  for p in ps:
+    p.join()
+  
+  if not q.empty():
+    print('Following repo ' + cls.red('failed') + ' to pull latest code...')
+    while not q.empty():
+      msg = q.get()
+      print(msg[0])
+      print(msg[1])
+      print(msg[2])
+      print()
 
 # =========================
 # SAVE
