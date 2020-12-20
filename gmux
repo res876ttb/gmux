@@ -1,0 +1,588 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import multiprocessing
+import subprocess
+import time
+import argparse
+import json
+
+# =========================
+# ARGPARSE
+# =========================
+
+parser = argparse.ArgumentParser(add_help=False)
+subparser = parser.add_subparsers(dest='subcmd')
+
+parser_ls = subparser.add_parser('ls', help='List all sessions.', add_help=False)
+parser_ls.add_argument('-a', '--all', help='List all sessions with all the repos.', action='store_true')
+
+parser_set = subparser.add_parser('set', help='Configure gmux.', add_help=False)
+subparser_set = parser_set.add_subparsers(dest='subcmd_set')
+parser_set_session = subparser_set.add_parser('session', help='Rename a session.', add_help=False)
+parser_set_session.add_argument('old_name', help='Name of the session.', type=str)
+parser_set_session.add_argument('new_name', help='New name of the session.', type=str)
+parser_set_repo = subparser_set.add_parser('repo', help='Set repo option.', add_help=False)
+parser_set_repo.add_argument('-a', '--all', help='Use repo command to replace both git pull and git checkout.', action='store_true')
+parser_set_repo.add_argument('-p', '--pull', help='Toggle this option: use repo command `repo sync` to replace git pull.', action='store_true')
+parser_set_repo.add_argument('-c', '--checkout', help='Toggle this option: use repo command `repo start` to replace git branch.', action='store_true')
+parser_set_ls = subparser_set.add_parser('ls', help='Show current configuration.', add_help=False)
+
+parser_checkout = subparser.add_parser('checkout', help='Checkout between different branches.', add_help=False)
+parser_checkout.add_argument('branch', help='Name of the branch to checkout.', type=str)
+parser_checkout.add_argument('-b', '--bring-change', help='Bring change to the new branch with git stash.', action='store_true')
+parser_checkout.add_argument('-d', '--discard-change', help='Discard changes in current branches.', action='store_true')
+parser_checkout.add_argument('-n', '--no-stash', help='Do not restore from git stash after checking out.', action='store_true')
+
+parser_session = subparser.add_parser('session', help='Switch between different sessions.', add_help=False)
+parser_session.add_argument('session_name', help='Switch to a certain session.', type=str, nargs='?')
+
+parser_add = subparser.add_parser('add', help='Add git repo to current session.', add_help=False)
+parser_add.add_argument('path', help='Path to git repo, or the parent directory of git repos.', type=str)
+
+parser_pull = subparser.add_parser('pull', help='Run git pull in the git repos of current session', add_help=False)
+
+parser_rebase = subparser.add_parser('rebase', help='Run git rebase on current branch.', add_help=False)
+
+parser_stash = subparser.add_parser('stash', help='Manage the stash created by gmux.', add_help=False)
+
+parser_status = subparser.add_parser('status', help='Show git status.', add_help=False)
+parser_status.add_argument('-a', '--all', help='Show git status of all sessions. If this is not specified, only current session will be shown.', action='store_true')
+
+parser_help = subparser.add_parser('help', help='Print this message. Use `gmux help <command>` to show more help messages.', add_help=False)
+parser_help.add_argument('help_cmd', help='Other command.', nargs='?', type=str)
+
+args = parser.parse_args()
+
+# =========================
+# GLOBAL VARIABLES
+# =========================
+config = None
+session = None
+
+gmuxPath = os.environ['HOME'] + '/.gmux'
+gmuxConfigPath = gmuxPath + '/config'
+
+# Default data structure
+defaultConfig = {
+  'sessions': {}, # session name, session id
+  'lastSession': '-1',
+  'repo': {
+    'pull': False,
+    'checkout': False,
+  }
+}
+defaultSession = {
+  'paths': [],
+  'number': '0',
+}
+
+# =========================
+# CONSTANT VARIABLES
+# =========================
+
+class Color:
+  def __init__(self):
+    self.PINK = '\033[95m'
+    self.BLUE = '\033[94m'
+    self.CYAN = '\033[96m'
+    self.GREEN = '\033[92m'
+    self.YELLOW = '\033[93m'
+    self.RED = '\033[91m'
+    self.ENDC = '\033[0m'
+    self.BOLD = '\033[1m'
+    self.UNDERLINE = '\033[4m'
+
+  def red(self, string):
+    return self.RED + string + self.ENDC
+  
+  def green(self, string):
+    return self.GREEN + string + self.ENDC
+  
+  def pink(self, string):
+    return self.PINK + string + self.ENDC
+
+  def cyan(self, string):
+    return self.CYAN + string + self.ENDC
+
+  def blue(self, string):
+    return self.BLUE + string + self.ENDC
+
+  def yellow(self, string):
+    return self.YELLOW + string + self.ENDC
+  
+  def bold(self, string):
+    return self.BOLD + string + self.ENDC
+  
+  def underline(self, string):
+    return self.UNDERLINE + string + self.ENDC
+
+clr = Color()
+
+# =========================
+# GENERAL FUNCTIONS
+# =========================
+
+class tchd(object):
+  '''
+  Temporarily change working directory.
+  Usage:
+    with tchd('path'):
+      # code here
+  '''
+  def __init__(self, path):
+    self.cpath = os.getcwd()
+    self.path = path
+  
+  def __enter__(self):
+    if self.path != '.':
+      os.chdir(self.path)
+  
+  def __exit__(self, type, value, traceback):
+    if self.path != '.':
+      os.chdir(self.cpath)
+
+def isGit(path='.'):
+  '''
+  Check whether the path is a git repo.
+  '''
+  with tchd(path):
+    res = True
+    if subprocess.call(["git", "branch"], stderr=subprocess.STDOUT, stdout=open(os.devnull, 'w')) != 0:
+      res = False
+  return res
+
+def searchGitRepo(path='.'):
+  '''
+  Search all sub directories to find the git repo.
+  '''
+  destPaths = []
+  with tchd(path):
+    if isGit():
+      return [os.getcwd()]
+    
+    def searchGitRepo_engine(p):
+      with tchd(p):
+        if os.path.isdir('.git'):
+          destPaths.append(os.getcwd())
+          return
+        else:
+          for fod in os.listdir():
+            if os.path.isdir(fod):
+              searchGitRepo_engine(fod)
+    
+    searchGitRepo_engine('.')
+  
+  return destPaths
+
+def getGitBranch(path='.'):
+  '''
+  Get git branches on all git repos.
+  '''
+  with tchd(path):
+    p = subprocess.Popen('git branch'.split(' '), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stdout, stderr = p.communicate()
+    stdout = stdout.decode('utf-8')
+  
+  return [line.split(' ')[-1] for line in stdout.split('\n')[:-1]]
+
+# =========================
+# INIT
+# =========================
+
+def init():
+  '''
+  Program initialization.
+  1. Load config.
+  '''
+  global config, session
+  
+  if not os.path.exists(gmuxPath):
+    os.makedirs(gmuxPath, exist_ok=True)
+  
+  if os.path.exists(gmuxConfigPath):
+    with open(gmuxConfigPath, 'r') as fp:
+      config = json.load(fp)
+  else:
+    # Config file does not exist. Create a default one.
+    config = defaultConfig
+    with open(gmuxConfigPath, 'w') as fp:
+      json.dump(config, fp)
+  
+  if config['lastSession'] != '-1':
+    with open(gmuxPath + '/session' + config['sessions'][config['lastSession']], 'r') as fp:
+      session = json.load(fp)
+
+# =========================
+# SET
+# =========================
+
+def set_():
+  '''
+  Configure gmux setting.
+  '''
+  pass
+
+# =========================
+# ADD
+# =========================
+
+def add():
+  '''
+  Add git repo to a gmux session
+  '''
+  global config, session
+
+  if args.path:
+    os.chdir(args.path)
+  
+  gitRepoPaths = searchGitRepo()
+  if session == None:
+    session = defaultSession
+    session['paths'] = gitRepoPaths
+    config['lastSession'] = '0'
+    config['sessions']['0'] = '0'
+  else:
+    for path in gitRepoPaths:
+      if path not in session['paths']:
+        session['paths'].append(path)
+
+# =========================
+# ls
+# =========================
+
+def ls():
+  '''
+  List all sessions.
+  '''
+  if len(config['sessions']) == 0:
+    print('No available session.')
+  else:
+    for sess in config['sessions']:
+      if config['lastSession'] == sess:
+        print('* ' + sess)
+        if args.all:
+          with open(gmuxPath + '/session' + config['sessions'][sess], 'r') as fp:
+            sess = json.load(fp)
+            for path in sess['paths']:
+              print('    ' + path)
+      else:
+        print('  ' + sess)
+        if args.all:
+          with open(gmuxPath + '/session' + config['sessions'][sess], 'r') as fp:
+            sess = json.load(fp)
+            for path in sess['paths']:
+              print('    ' + path)
+
+# =========================
+# CHECKOUT
+# =========================
+
+def getGitUntracked(path, q):
+  '''
+  Check whether there are untracked files.
+  '''
+  p = subprocess.Popen('git status'.split(' '), stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=path)
+  stdout, stderr = p.communicate()
+  stdout = stdout.decode('utf-8')
+  q.put((path, 'Untracked' in stdout))
+
+def tryCheckout(path, targetBranch, useRepo, bringChange, discardChange, noStash):
+  '''
+  Try to checkout. Follow the procedure described below.
+  '''
+  os.chdir(path)
+
+  stashList = []
+  cls = Color()
+
+  def checkError(stdout, stderr, p, msg):
+    if p.returncode != 0:
+      print(msg, flush=True)
+      print(stdout, flush=True)
+      print(stderr, flush=True)
+      exit(1)
+  
+  def runCmdAndCheck(command, msg):
+    p = subprocess.Popen(command.split(' '), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stdout, stderr = p.communicate()
+    stdout, stderr = stdout.decode('utf-8'), stderr.decode('utf-8')
+    checkError(stdout, stderr, p, msg)
+  
+  def getStashInfo():
+    p = subprocess.Popen('git stash list'.split(' '), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stdout, stderr = p.communicate()
+    stdout, stderr = stdout.decode('utf-8'), stderr.decode('utf-8')
+    checkError(stdout, stderr, p, cls.red('ERROR') + ' occurs in command `git stash list`:')
+    return stdout.split('\n')
+
+  # 1. Check whether current branch is clean.
+  p = subprocess.Popen('git status'.split(' '), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+  stdout, stderr = p.communicate()
+  stdout, stderr = stdout.decode('utf-8'), stderr.decode('utf-8')
+  checkError(stdout, stderr, p, cls.red('ERROR') + ' occurs in command `git status`:')
+  isClean = True if 'working tree clean' in stdout else False
+  currentBranch = stdout.split('\n')[0].split(' ')[-1]
+
+  # 2. Save current change into stash. Or, discard the changes
+  gmuxMsg = 'zzzzzzzzzzzzzzzzzz'
+  if not discardChange:
+    gmuxMsg = 'gmux:%s:%s:latest' % (currentBranch, time.time())
+    if not isClean:
+      runCmdAndCheck('git stash push -m %s' % gmuxMsg, cls.red('ERROR') + ' occurs in command `git stash push`:')
+  else:
+    runCmdAndCheck('git reset --hard', cls.red('ERROR') + ' occurs in command `git reset --hard`:')
+
+  # 3. Get git stash info.
+  stash = getStashInfo()
+
+  # 4. Check whether there is any other git stash labeled as latest in this branch. If so, remember it's name.
+  while True:
+    finded = False
+    for line in stash:
+      if gmuxMsg not in line and ':%s:' % currentBranch in line and 'latest' in line:
+        stashNumber = line.split('}')[0].split('{')[1]
+        runCmdAndCheck('git stash pop %s' % stashNumber, cls.red('ERROR') + ' occurs in command `git stash pop`:')
+
+        stashMsg = 'gmux:' + line.split('gmux:')[1].split(':latest')[0]
+        runCmdAndCheck('git stash push -m %s' % stashMsg, cls.red('ERROR') + ' occurs in command `git stash push`:')
+        finded = True
+        break
+    
+    if not finded:
+      break
+    stash = getStashInfo()
+  
+  # 5. Check whether target branch exists. If not, create it.
+  branches = getGitBranch()
+  targetBranchExists = targetBranch in branches
+  if not targetBranchExists:
+    if useRepo:
+      pass # TODO
+    else:
+      runCmdAndCheck('git branch %s' % targetBranch, cls.red('ERROR') + ' occurs in command `git branch`:')
+  
+  # 6. Checkout to the target branch.
+  if useRepo and targetBranchExists:
+    pass # TODO
+  else:
+    runCmdAndCheck('git checkout %s' % targetBranch, cls.red('ERROR') + ' occurs in command `git branch`:')
+  
+  # 7. Restore the stash if necessary
+  if bringChange:
+    # 7.1 Check whether there are stash with the latest mark in the target branch
+    while True:
+      finded = False
+      for line in stash:
+        if gmuxMsg not in line and ':%s:' % targetBranch in line and 'latest' in line:
+          stashNumber = line.split('}')[0].split('{')[1]
+          runCmdAndCheck('git stash pop %s' % stashNumber, cls.red('ERROR') + ' occurs in command `git stash pop`:')
+
+          stashMsg = 'gmux:' + line.split('gmux:')[1].split(':latest')[0]
+          runCmdAndCheck('git stash push -m %s' % stashMsg, cls.red('ERROR') + ' occurs in command `git stash push`:')
+          finded = True
+      
+      if not finded:
+        break
+      stash = getStashInfo()
+    
+    for line in stash:
+      if gmuxMsg in line:
+        stashNumber = line.split('}')[0].split('{')[1]
+        print(line, stashNumber)
+        runCmdAndCheck('git stash pop %s' % stashNumber, cls.red('ERROR') + ' occurs in command `git stash pop`:')
+        break
+  else:
+    if not noStash:
+      for line in stash:
+        if 'gmux:%s:' % targetBranch in line and ':latest' in line:
+          stashNumber = line.split('}')[0].split('{')[1]
+          runCmdAndCheck('git stash pop %s' % stashNumber, cls.red('ERROR') + ' occurs in command `git stash pop`:')
+          break
+
+def checkout():
+  '''
+  Switch between different git branches.
+
+  # Flow
+
+  1. Check whether there are untracked files in current branch. If so, fail
+  2. Check whether current branch is clean. If not, stash current change with gmux message.
+  3. Check whether the target branch has stash created by gmux. If so, apply it.
+  
+  # Rule
+
+  1. Checkout procedure will create stash automatically if current branch is not clean.
+  2. If there are untracked files in current branch, the procedure cannot work. <- TODO: solution?
+  3. Checkout procedure will only apply stash created by gmux.
+  4. By default, gmux will apply the gmux stash on the target branch automatically. However, user can disable it with argument `--no-stash`.
+  5. By default, gmux will store all the change in current branch with git stash before checking out. However, user can discard these changes with argument `--discard-change`;
+  6. User can use argument `--bring-change` to bring changes on current branch to the target branch with git stash. This argument will ignore the 2 arguments above.
+  '''
+
+  # Check whether `--bring-change` and `--discard-change` are specified at the same time. If so, fail
+  if args.bring_change and args.discard_change:
+    print('`--bring-change` and `--discard-change` cannot be specified at the same time.', file=sys.stderr)
+    exit(1)
+
+  if len(session['paths']) == 0:
+    print('No repos in this session.')
+  else:
+    # Check whether there is untracked changes in any git repo.
+    untracked = False
+    untrackedPath = []
+    q = multiprocessing.Queue()
+    ps = []
+    for path in session['paths']:
+      p = multiprocessing.Process(target=getGitUntracked, args=(path, q,))
+      p.start()
+      ps.append(p)
+    for p in ps:
+      p.join()
+      msg = q.get()
+      if msg[1]:
+        untrackedPath.append(msg[0])
+      untracked |= msg[1]
+    
+    if untracked:
+      print('Some of the repos have ' + clr.red('untracked') +' changes:')
+      for p in untrackedPath:
+        print('  ' + p)
+      exit(1)
+
+    # Switch/Checkout to new branch.
+    for path in session['paths']:
+      p = multiprocessing.Process(target=tryCheckout, args=(path, args.branch, config['repo']['checkout'], args.bring_change, args.discard_change, args.no_stash,))
+      p.start()
+      ps.append(p)
+    for p in ps:
+      p.join()
+
+# =========================
+# STATUS
+# =========================
+
+def getGitStatus(path, q):
+  p = subprocess.Popen('git status'.split(' '), cwd=path, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+  stdout, stderr = p.communicate()
+  stdout = stdout.decode('utf-8')
+  stderr = stderr.decode('utf-8')
+  q.put((path, stdout, stderr))
+
+def status():
+  '''
+  Show status of all git repos.
+  '''
+  
+  def go(sess):
+    paths = sess['paths']
+    
+    q = multiprocessing.Queue()
+    ps = []
+    msgs = []
+    for path in paths:
+      p = multiprocessing.Process(target=getGitStatus, args=(path, q,))
+      p.start()
+      ps.append(p)
+    for p in ps:
+      p.join()
+      msgs.append(q.get())
+    msgs.sort()
+    for msg in msgs:
+      if 'working tree clean' in msg[1]:
+        print('In %s :' % clr.underline(msg[0]), clr.green('CLEAN'))
+      else:
+        print('In %s :' % clr.underline(msg[0]), clr.red('NOT CLEAN'))
+        print(msg[1])
+        if msg[2]:
+          print(msg[2])
+  
+  if args.all:
+    sessionPaths = [gmuxPath + '/session' + config['sessions'][key] for key in config['sessions']]
+    for sessionName in config['sessions']:
+      path = gmuxPath + '/session' + config['sessions'][sessionName]
+      print('In session', clr.underline(sessionName) + ':')
+      with open(path, 'r') as fp:
+        sess = json.load(fp)
+        go(sess)
+      print()
+  else:
+    go(session)
+
+# =========================
+# SAVE
+# =========================
+
+def save():
+  '''
+  Save running config and session info.
+  '''
+  with open(gmuxConfigPath, 'w') as fp:
+    json.dump(config, fp)
+  
+  if config['lastSession'] != '-1':
+    with open(gmuxPath + '/session' + config['lastSession'], 'w') as fp:
+      json.dump(session, fp)
+
+# =========================
+# HELP
+# =========================
+
+def help_():
+  if args.help_cmd:
+    if args.help_cmd == 'ls':
+      parser_ls.print_help()
+    elif args.help_cmd == 'checkout':
+      parser_checkout.print_help()
+    elif args.help_cmd == 'set':
+      parser_set.print_help()
+    elif args.help_cmd == 'status':
+      parser_status.print_help()
+    elif args.help_cmd == 'session':
+      parser_session.print_help()
+    elif args.help_cmd == 'pull':
+      parser_pull.print_help()
+    elif args.help_cmd == 'add':
+      parser_add.print_help()
+    elif args.help_cmd == 'rebase':
+      parser_rebase.print_help()
+    else:
+      print('Unknown command:', args.help_cmd, file=sys.stderr)
+      exit(1)
+  else:
+    parser.print_help()
+
+# =========================
+# MAIN
+# =========================
+
+def main():
+  init()
+
+  if args.subcmd == 'ls':
+    ls()
+  elif args.subcmd == 'checkout':
+    checkout()
+  elif args.subcmd == 'set':
+    set_()
+  elif args.subcmd == 'status':
+    status()
+  elif args.subcmd == 'session':
+    session()
+  elif args.subcmd == 'pull':
+    pull()
+  elif args.subcmd == 'add':
+    add()
+  elif args.subcmd == 'stash':
+    stash()
+  elif args.subcmd == 'help':
+    help_()
+  else:
+    print('Unknown subcmd: %s' % args.subcmd, file=sys.stderr)
+    exit(1)
+  
+  save()
+
+if __name__ == "__main__":
+  main()
