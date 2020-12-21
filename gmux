@@ -44,8 +44,7 @@ parser_add.add_argument('path', help='Path to git repo, or the parent directory 
 parser_pull = subparser.add_parser('pull', help='Run git pull in the git repos of current session', add_help=False)
 
 parser_rebase = subparser.add_parser('rebase', help='Run git rebase on current branch.', add_help=False)
-
-parser_stash = subparser.add_parser('stash', help='Manage the stash created by gmux.', add_help=False)
+parser_rebase.add_argument('branch', help='The target branch to rebase.', type=str)
 
 parser_status = subparser.add_parser('status', help='Show git status.', add_help=False)
 parser_status.add_argument('-a', '--all', help='Show git status of all sessions. If this is not specified, only current session will be shown.', action='store_true')
@@ -296,7 +295,6 @@ def tryCheckout(path, targetBranch, useRepo, bringChange, discardChange, noStash
   os.chdir(path)
 
   stashList = []
-  cls = Color()
 
   def checkError(stdout, stderr, p, msg):
     if p.returncode != 0:
@@ -315,14 +313,14 @@ def tryCheckout(path, targetBranch, useRepo, bringChange, discardChange, noStash
     p = subprocess.Popen('git stash list'.split(' '), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stdout, stderr = p.communicate()
     stdout, stderr = stdout.decode('utf-8'), stderr.decode('utf-8')
-    checkError(stdout, stderr, p, cls.red('ERROR') + ' occurs in command `git stash list`:')
+    checkError(stdout, stderr, p, clr.red('ERROR') + ' occurs in command `git stash list`:')
     return stdout.split('\n')
 
   # 1. Check whether current branch is clean.
   p = subprocess.Popen('git status'.split(' '), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
   stdout, stderr = p.communicate()
   stdout, stderr = stdout.decode('utf-8'), stderr.decode('utf-8')
-  checkError(stdout, stderr, p, cls.red('ERROR') + ' occurs in command `git status`:')
+  checkError(stdout, stderr, p, clr.red('ERROR') + ' occurs in command `git status`:')
   isClean = True if 'working tree clean' in stdout else False
   currentBranch = stdout.split('\n')[0].split(' ')[-1]
 
@@ -331,9 +329,9 @@ def tryCheckout(path, targetBranch, useRepo, bringChange, discardChange, noStash
   if not discardChange:
     gmuxMsg = 'gmux:%s:%s:latest' % (currentBranch, time.time())
     if not isClean:
-      runCmdAndCheck('git stash push -m %s' % gmuxMsg, cls.red('ERROR') + ' occurs in command `git stash push`:')
+      runCmdAndCheck('git stash push -m %s' % gmuxMsg, clr.red('ERROR') + ' occurs in command `git stash push`:')
   else:
-    runCmdAndCheck('git reset --hard', cls.red('ERROR') + ' occurs in command `git reset --hard`:')
+    runCmdAndCheck('git reset --hard', clr.red('ERROR') + ' occurs in command `git reset --hard`:')
 
   # 3. Get git stash info.
   stash = getStashInfo()
@@ -344,10 +342,10 @@ def tryCheckout(path, targetBranch, useRepo, bringChange, discardChange, noStash
     for line in stash:
       if gmuxMsg not in line and ':%s:' % currentBranch in line and 'latest' in line:
         stashNumber = line.split('}')[0].split('{')[1]
-        runCmdAndCheck('git stash pop %s' % stashNumber, cls.red('ERROR') + ' occurs in command `git stash pop`:')
+        runCmdAndCheck('git stash pop %s' % stashNumber, clr.red('ERROR') + ' occurs in command `git stash pop`:')
 
         stashMsg = 'gmux:' + line.split('gmux:')[1].split(':latest')[0]
-        runCmdAndCheck('git stash push -m %s' % stashMsg, cls.red('ERROR') + ' occurs in command `git stash push`:')
+        runCmdAndCheck('git stash push -m %s' % stashMsg, clr.red('ERROR') + ' occurs in command `git stash push`:')
         finded = True
         break
     
@@ -362,13 +360,13 @@ def tryCheckout(path, targetBranch, useRepo, bringChange, discardChange, noStash
     if useRepo:
       pass # TODO
     else:
-      runCmdAndCheck('git branch %s' % targetBranch, cls.red('ERROR') + ' occurs in command `git branch`:')
+      runCmdAndCheck('git branch %s' % targetBranch, clr.red('ERROR') + ' occurs in command `git branch`:')
   
   # 6. Checkout to the target branch.
   if useRepo and targetBranchExists:
     pass # TODO
   else:
-    runCmdAndCheck('git checkout %s' % targetBranch, cls.red('ERROR') + ' occurs in command `git branch`:')
+    runCmdAndCheck('git checkout %s' % targetBranch, clr.red('ERROR') + ' occurs in command `git branch`:')
   
   # 7. Restore the stash if necessary
   if bringChange:
@@ -378,10 +376,10 @@ def tryCheckout(path, targetBranch, useRepo, bringChange, discardChange, noStash
       for line in stash:
         if gmuxMsg not in line and ':%s:' % targetBranch in line and 'latest' in line:
           stashNumber = line.split('}')[0].split('{')[1]
-          runCmdAndCheck('git stash pop %s' % stashNumber, cls.red('ERROR') + ' occurs in command `git stash pop`:')
+          runCmdAndCheck('git stash pop %s' % stashNumber, clr.red('ERROR') + ' occurs in command `git stash pop`:')
 
           stashMsg = 'gmux:' + line.split('gmux:')[1].split(':latest')[0]
-          runCmdAndCheck('git stash push -m %s' % stashMsg, cls.red('ERROR') + ' occurs in command `git stash push`:')
+          runCmdAndCheck('git stash push -m %s' % stashMsg, clr.red('ERROR') + ' occurs in command `git stash push`:')
           finded = True
       
       if not finded:
@@ -393,7 +391,7 @@ def tryCheckout(path, targetBranch, useRepo, bringChange, discardChange, noStash
       if gmuxMsg in line:
         stashNumber = line.split('}')[0].split('{')[1]
         print(line, stashNumber)
-        runCmdAndCheck('git stash pop %s' % stashNumber, cls.red('ERROR') + ' occurs in command `git stash pop`:')
+        runCmdAndCheck('git stash pop %s' % stashNumber, clr.red('ERROR') + ' occurs in command `git stash pop`:')
         break
   else:
     # 7.3 Restore the change of the target branch
@@ -401,7 +399,7 @@ def tryCheckout(path, targetBranch, useRepo, bringChange, discardChange, noStash
       for line in stash:
         if 'gmux:%s:' % targetBranch in line and ':latest' in line:
           stashNumber = line.split('}')[0].split('{')[1]
-          runCmdAndCheck('git stash pop %s' % stashNumber, cls.red('ERROR') + ' occurs in command `git stash pop`:')
+          runCmdAndCheck('git stash pop %s' % stashNumber, clr.red('ERROR') + ' occurs in command `git stash pop`:')
           break
 
 def checkout():
@@ -526,14 +524,13 @@ def runPull(path, useRepo, q):
   p = subprocess.Popen('git status'.split(' '), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
   stdout, stderr = p.communicate()
   stdout, stderr = stdout.decode('utf-8'), stderr.decode('utf-8')
-  checkError(stdout, stderr, p, cls.red('ERROR') + ' occurs in command `git status`:')
+  checkError(stdout, stderr, p, clr.red('ERROR') + ' occurs in command `git status`:')
   isClean = True if 'working tree clean' in stdout else False
 
   if not isClean:
     q.put((path, stdout, stderr))
     return
 
-  cls = Color()
   p = subprocess.Popen('git pull', stdout=subprocess.PIPE, stderr=subprocess.PIPE)
   stdout, stderr = p.communicate()
   stdout, stderr = stdout.decode('utf-8'), stderr.decode('utf-8')
@@ -557,13 +554,49 @@ def pull():
     p.join()
   
   if not q.empty():
-    print('Following repo ' + cls.red('failed') + ' to pull latest code...')
+    print('Following repo ' + clr.red('FAILED') + ' to pull latest code...')
     while not q.empty():
       msg = q.get()
       print(msg[0])
       print(msg[1])
       print(msg[2])
       print()
+
+# =========================
+# REBASE
+# =========================
+
+def runGitRebase(path, branch, q):
+  os.chdir(path)
+  p = subprocess.Popen(('git rebase %s' % branch).split(' '), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+  stdout, stderr = p.communicate()
+  stdout, stderr = stdout.decode('utf-8'), stderr.decode('utf-8')
+  q.put((path, p.returncode, stdout, stderr))
+
+def rebase():
+  '''
+  Run git rebase on each git repos.
+  '''
+  clr = Color()
+  paths = session['paths']
+  q = multiprocessing.Queue()
+  ps = []
+  msgs = []
+
+  for path in paths:
+    p = multiprocessing.Process(target=runGitRebase, args=(path, args.branch, q,))
+    p.start()
+    ps.append(p)
+  for p in ps:
+    p.join()
+    msgs.append(q.get())
+  msgs.sort()
+
+  for (path, retcode, stdout, stderr) in msgs:
+    if retcode != 0:
+      print('Rebase', clr.red('FAILED'), 'in %s :' % path)
+      print(stdout)
+      print(stderr)
 
 # =========================
 # SAVE
@@ -629,8 +662,8 @@ def main():
     pull()
   elif args.subcmd == 'add':
     add()
-  elif args.subcmd == 'stash':
-    stash()
+  elif args.subcmd == 'rebase':
+    rebase()
   elif args.subcmd == 'help':
     help_()
   else:
