@@ -3,13 +3,14 @@ Tmux for git repos.
 
 # Progress
 
-- [x] ls
-- [ ] set
-- [x] checkout
-- [ ] session
 - [x] add
+- [x] checkout
+- [x] delete
+- [ ] help
+- [x] ls
 - [x] pull
-- [ ] rebase
+- [x] rebase
+- [ ] session
+- [ ] set
 - [ ] stash
 - [x] status
-- [ ] help

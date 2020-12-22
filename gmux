@@ -46,6 +46,9 @@ parser_pull = subparser.add_parser('pull', help='Run git pull in the git repos o
 parser_rebase = subparser.add_parser('rebase', help='Run git rebase on current branch.', add_help=False)
 parser_rebase.add_argument('branch', help='The target branch to rebase.', type=str)
 
+parser_delete = subparser.add_parser('delete', help='Delete a gmux session.', add_help=False)
+parser_delete.add_argument('session', help='The session you want to delete. Note that this option will not delete the git repo from disk.', nargs='*')
+
 parser_status = subparser.add_parser('status', help='Show git status.', add_help=False)
 parser_status.add_argument('-a', '--all', help='Show git status of all sessions. If this is not specified, only current session will be shown.', action='store_true')
 
@@ -599,6 +602,25 @@ def rebase():
       print(stderr)
 
 # =========================
+# DELETE
+# =========================
+
+def delete():
+  '''
+  Delete current session.
+  '''
+  sesses = args.session if len(args.session) > 0 else [config['lastSession']]
+
+  for sess in sesses:
+    print('rm -f %s' % (os.environ['HOME'] + '/.gmux/session' + config['sessions'][sess]))
+    os.system('rm -f %s' % (os.environ['HOME'] + '/session' + config['sessions'][sess]))
+    del config['sessions'][sess]
+    if len(config['sessions']) == 0:
+      config['lastSession'] = '-1'
+    elif config['lastSession'] == sess:
+      config['lastSession'] = next(iter(config['sessions']))
+
+# =========================
 # SAVE
 # =========================
 
@@ -635,6 +657,8 @@ def help_():
       parser_add.print_help()
     elif args.help_cmd == 'rebase':
       parser_rebase.print_help()
+    elif args.help_cmd == 'delete':
+      parser_delete.print_help()
     else:
       print('Unknown command:', args.help_cmd, file=sys.stderr)
       exit(1)
@@ -664,6 +688,8 @@ def main():
     add()
   elif args.subcmd == 'rebase':
     rebase()
+  elif args.subcmd == 'delete':
+    delete()
   elif args.subcmd == 'help':
     help_()
   else:
