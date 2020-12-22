@@ -10,7 +10,7 @@ Tmux for git repos.
 - [x] ls
 - [x] pull
 - [x] rebase
-- [ ] session
+- [x] session
 - [ ] set
 - [ ] stash
 - [x] status

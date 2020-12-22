@@ -36,7 +36,7 @@ parser_checkout.add_argument('-d', '--discard-change', help='Discard changes in 
 parser_checkout.add_argument('-n', '--no-stash', help='Do not restore from git stash after checking out.', action='store_true')
 
 parser_session = subparser.add_parser('session', help='Switch between different sessions.', add_help=False)
-parser_session.add_argument('session_name', help='Switch to a certain session.', type=str, nargs='?')
+parser_session.add_argument('target', help='The target session you want to switch to.', type=str, nargs='?')
 
 parser_add = subparser.add_parser('add', help='Add git repo to current session.', add_help=False)
 parser_add.add_argument('path', help='Path to git repo, or the parent directory of git repos.', type=str)
@@ -609,22 +609,61 @@ def delete():
   '''
   Delete current session.
   '''
+  if len(config['sessions']) == 0:
+    print('No session available.')
+    return
+
   sesses = args.session if len(args.session) > 0 else [config['lastSession']]
 
   for sess in sesses:
-    print('rm -f %s' % (os.environ['HOME'] + '/.gmux/session' + config['sessions'][sess]))
-    os.system('rm -f %s' % (os.environ['HOME'] + '/session' + config['sessions'][sess]))
+    os.remove('%s' % (os.environ['HOME'] + '/.gmux/session' + config['sessions'][sess]))
     del config['sessions'][sess]
     if len(config['sessions']) == 0:
       config['lastSession'] = '-1'
     elif config['lastSession'] == sess:
       config['lastSession'] = next(iter(config['sessions']))
+  
+  save(noSession=True)
+  exit(0)
+
+# =========================
+# SESSION
+# =========================
+
+def session_():
+  '''
+  Switch to or create a session.
+  '''
+  global config, session
+
+  if args.target:
+    if args.target not in config['sessions']:
+      print('Session %s is %s available!' % (args.target, clr.red('NOT')))
+      return
+    
+    config['lastSession'] = args.target
+    print('Switch to session %s.' % args.target)
+
+    with open(gmuxPath + '/session' + config['sessions'][config['lastSession']], 'r') as fp:
+      session = json.load(fp)
+  else:
+    # Create a new session
+    if len(config['sessions']) > 0:
+      sessionNumber = '%d' % (max([int(config['sessions'][sess]) for sess in config['sessions']]) + 1)
+    else:
+      sessionNumber = '0'
+    
+    config['sessions'][sessionNumber] = sessionNumber
+    config['lastSession'] = sessionNumber
+    session = defaultSession
+    session['number'] = sessionNumber
+    print('Session %s is created successfully.' % sessionNumber)
 
 # =========================
 # SAVE
 # =========================
 
-def save():
+def save(noSession=False):
   '''
   Save running config and session info.
   '''
@@ -681,7 +720,7 @@ def main():
   elif args.subcmd == 'status':
     status()
   elif args.subcmd == 'session':
-    session()
+    session_()
   elif args.subcmd == 'pull':
     pull()
   elif args.subcmd == 'add':
