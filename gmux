@@ -518,7 +518,10 @@ def status():
         go(sess)
       print()
   else:
-    go(session)
+    if session:
+      go(session)
+    else:
+      print('No available session.', file=sys.stderr)
 
 # =========================
 # PULL
@@ -725,7 +728,7 @@ def save(noSession=False):
 # =========================
 
 def help_():
-  if args.help_cmd:
+  if hasattr(args, 'help_cmd') and args.help_cmd:
     if args.help_cmd == 'ls':
       parser_ls.print_help()
     elif args.help_cmd == 'checkout':
@@ -775,7 +778,7 @@ def main():
     rebase()
   elif args.subcmd == 'delete':
     delete()
-  elif args.subcmd == 'help':
+  elif args.subcmd == 'help' or args.subcmd == None:
     help_()
   else:
     print('Unknown subcmd: %s' % args.subcmd, file=sys.stderr)
