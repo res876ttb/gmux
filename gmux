@@ -15,19 +15,8 @@ import json
 parser = argparse.ArgumentParser(add_help=False)
 subparser = parser.add_subparsers(dest='subcmd')
 
-parser_ls = subparser.add_parser('ls', help='List all sessions.', add_help=False)
-parser_ls.add_argument('-a', '--all', help='List all sessions with all the repos.', action='store_true')
-
-parser_set = subparser.add_parser('set', help='Configure gmux.', add_help=False)
-subparser_set = parser_set.add_subparsers(dest='subcmd_set')
-parser_set_session = subparser_set.add_parser('session', help='Rename a session.', add_help=False)
-parser_set_session.add_argument('old_name', help='Name of the session.', type=str)
-parser_set_session.add_argument('new_name', help='New name of the session.', type=str)
-parser_set_repo = subparser_set.add_parser('repo', help='Set repo option.', add_help=False) # TODO: per session setup
-parser_set_repo.add_argument('-a', '--all', help='Use repo command to replace both git pull and git checkout.', action='store_true')
-parser_set_repo.add_argument('-p', '--pull', help='Toggle this option: use repo command `repo sync` to replace git pull.', action='store_true')
-parser_set_repo.add_argument('-c', '--checkout', help='Toggle this option: use repo command `repo start` to replace git branch.', action='store_true')
-parser_set_ls = subparser_set.add_parser('ls', help='Show current configuration.', add_help=False)
+parser_add = subparser.add_parser('add', help='Add git repo to current session.', add_help=False)
+parser_add.add_argument('path', help='Path to git repo, or the parent directory of git repos.', type=str)
 
 parser_checkout = subparser.add_parser('checkout', help='Checkout between different branches.', add_help=False)
 parser_checkout.add_argument('branch', help='Name of the branch to checkout.', type=str)
@@ -35,19 +24,30 @@ parser_checkout.add_argument('-b', '--bring-change', help='Bring change to the n
 parser_checkout.add_argument('-d', '--discard-change', help='Discard changes in current branches.', action='store_true')
 parser_checkout.add_argument('-n', '--no-stash', help='Do not restore from git stash after checking out.', action='store_true')
 
-parser_session = subparser.add_parser('session', help='Switch between different sessions.', add_help=False)
-parser_session.add_argument('target', help='The target session you want to switch to.', type=str, nargs='?')
+parser_delete = subparser.add_parser('delete', help='Delete a gmux session.', add_help=False)
+parser_delete.add_argument('session', help='The session you want to delete. Note that this option will not delete the git repo from disk.', nargs='*')
 
-parser_add = subparser.add_parser('add', help='Add git repo to current session.', add_help=False)
-parser_add.add_argument('path', help='Path to git repo, or the parent directory of git repos.', type=str)
+parser_ls = subparser.add_parser('ls', help='List all sessions.', add_help=False)
+parser_ls.add_argument('-a', '--all', help='List all sessions with all the repos.', action='store_true')
 
 parser_pull = subparser.add_parser('pull', help='Run git pull in the git repos of current session', add_help=False)
 
 parser_rebase = subparser.add_parser('rebase', help='Run git rebase on current branch.', add_help=False)
 parser_rebase.add_argument('branch', help='The target branch to rebase.', type=str)
 
-parser_delete = subparser.add_parser('delete', help='Delete a gmux session.', add_help=False)
-parser_delete.add_argument('session', help='The session you want to delete. Note that this option will not delete the git repo from disk.', nargs='*')
+parser_session = subparser.add_parser('session', help='Switch between different sessions.', add_help=False)
+parser_session.add_argument('target', help='The target session you want to switch to.', type=str, nargs='?')
+
+parser_set = subparser.add_parser('set', help='Configure gmux.', add_help=False)
+subparser_set = parser_set.add_subparsers(dest='subcmd_set')
+parser_set_session = subparser_set.add_parser('session', help='Rename a session.')
+parser_set_session.add_argument('old_name', help='Name of the session.', type=str)
+parser_set_session.add_argument('new_name', help='New name of the session.', type=str)
+parser_set_repo = subparser_set.add_parser('repo', help='Set repo option.') # TODO: per session setup
+parser_set_repo.add_argument('-a', '--all', help='Use repo command to replace both git pull and git checkout.', action='store_true')
+parser_set_repo.add_argument('-p', '--pull', help='Toggle this option: use repo command `repo sync` to replace git pull.', action='store_true')
+parser_set_repo.add_argument('-c', '--checkout', help='Toggle this option: use repo command `repo start` to replace git branch.', action='store_true')
+parser_set_ls = subparser_set.add_parser('ls', help='Show current configuration.', add_help=False)
 
 parser_status = subparser.add_parser('status', help='Show git status.', add_help=False)
 parser_status.add_argument('-a', '--all', help='Show git status of all sessions. If this is not specified, only current session will be shown.', action='store_true')
@@ -268,15 +268,21 @@ def ls():
         if args.all:
           with open(gmuxPath + '/session' + config['sessions'][sess], 'r') as fp:
             sess = json.load(fp)
-            for path in sess['paths']:
-              print('    ' + path)
+            if len(sess['paths']) > 0:
+              for path in sess['paths']:
+                print('    ' + path)
+            else:
+              print(clr.yellow('    None.'))
       else:
         print('  ' + sess)
         if args.all:
           with open(gmuxPath + '/session' + config['sessions'][sess], 'r') as fp:
             sess = json.load(fp)
-            for path in sess['paths']:
-              print('    ' + path)
+            if len(sess['paths']) > 0:
+              for path in sess['paths']:
+                print('    ' + path)
+            else:
+              print(clr.yellow('    None.'))
 
 # =========================
 # CHECKOUT
@@ -660,6 +666,46 @@ def session_():
     print('Session %s is created successfully.' % sessionNumber)
 
 # =========================
+# SET
+# =========================
+
+def set_():
+  '''
+  Set configurations of gmux.
+  '''
+  if args.subcmd_set == 'session':
+    if args.old_name not in config['sessions']:
+      print('Session', args.old_name, 'not available!', file=sys.stderr)
+      exit(1)
+    if args.new_name in config['sessions']:
+      print('Session', args.new_name, 'has existed! Please use another name.', file=sys.stderr)
+      exit(1)
+
+    config['sessions'][args.new_name] = config['sessions'][args.old_name]
+    del config['sessions'][args.old_name]
+
+    if config['lastSession'] == args.old_name:
+      config['lastSession'] = args.new_name
+  elif args.subcmd_set == 'repo':
+    if args.all:
+      config['repo']['checkout'] = False if config['repo']['checkout'] else True
+      config['repo']['pull'] = False if config['repo']['pull'] else True
+    elif args.pull:
+      config['repo']['pull'] = False if config['repo']['pull'] else True
+    elif args.checkout:
+      config['repo']['checkout'] = False if config['repo']['checkout'] else True
+    else:
+      print('Use Repo:')
+      print('  Checkout:\t%s' % config['repo']['checkout'])
+      print('  Pull:\t\t%s' % config['repo']['pull'])
+  elif args.subcmd_set == 'ls':
+    print('Use Repo:')
+    print('  Checkout:\t%s' % config['repo']['checkout'])
+    print('  Pull:\t\t%s' % config['repo']['pull'])
+  else:
+    print('Unknown command', args.subcmd_set, file=sys.stderr)
+
+# =========================
 # SAVE
 # =========================
 
@@ -671,7 +717,7 @@ def save(noSession=False):
     json.dump(config, fp)
   
   if config['lastSession'] != '-1':
-    with open(gmuxPath + '/session' + config['lastSession'], 'w') as fp:
+    with open(gmuxPath + '/session' + config['sessions'][config['lastSession']], 'w') as fp:
       json.dump(session, fp)
 
 # =========================

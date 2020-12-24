@@ -6,11 +6,10 @@ Tmux for git repos.
 - [x] add
 - [x] checkout
 - [x] delete
-- [ ] help
+- [x] help
 - [x] ls
 - [x] pull
 - [x] rebase
 - [x] session
-- [ ] set
-- [ ] stash
+- [x] set
 - [x] status
