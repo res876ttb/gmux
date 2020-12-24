@@ -218,16 +218,6 @@ def init():
       session = json.load(fp)
 
 # =========================
-# SET
-# =========================
-
-def set_():
-  '''
-  Configure gmux setting.
-  '''
-  pass
-
-# =========================
 # ADD
 # =========================
 
@@ -500,10 +490,11 @@ def status():
       msgs.append(q.get())
     msgs.sort()
     for msg in msgs:
+      branchName = clr.bold(msg[1].split('\n')[0].split(' ')[-1])
       if 'working tree clean' in msg[1]:
-        print('In %s :' % clr.underline(msg[0]), clr.green('CLEAN'))
+        print('In %s :' % clr.underline(msg[0]), clr.green('CLEAN'), 'in branch', branchName)
       else:
-        print('In %s :' % clr.underline(msg[0]), clr.red('NOT CLEAN'))
+        print('In %s :' % clr.underline(msg[0]), clr.red('NOT CLEAN'), 'in branch', branchName)
         print(msg[1])
         if msg[2]:
           print(msg[2])
